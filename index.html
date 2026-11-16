@@ -130,33 +130,23 @@
     });
 
     async function geocodificar(enderecoOriginal) {
-        // 1. Limpeza e correção automática de abreviações e erros comuns de digitação
+        // Apenas limpeza essencial de abreviações e checagem direta
         let enderecoTratado = enderecoOriginal
             .replace(/\b(av|av\.)\b/gi, "Avenida")
             .replace(/\b(r|r\.)\b/gi, "Rua")
             .replace(/\b(tr|trav\.)\b/gi, "Travessa")
-            .replace(/\b(rod\.)\b/gi, "Rodovia")
             .trim();
 
         const temLocalidade = /joão pessoa|bayeux|santa rita|cabedelo|pb/i.test(enderecoTratado);
         const queryCompleta = temLocalidade ? enderecoTratado : enderecoTratado + ", Paraíba";
 
-        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=` + encodeURIComponent(queryCompleta);
+        // Uma única busca direta e limpa
+        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=3&q=` + encodeURIComponent(queryCompleta);
         
         try {
-            let resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/8.0' } });
-            let dados = await resposta.json();
+            const resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/10.0' } });
+            const dados = await resposta.json();
             
-            // 2. Busca de Recuperação (Fallback): se a primeira tentativa falhar (por erro ortográfico severo),
-            // tentamos uma busca mais ampla removendo números e refinando o termo.
-            if (!dados || dados.length === 0) {
-                const palavrasChave = enderecoTratado.replace(/[0-9]/g, '').trim();
-                const urlAmpla = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=` + encodeURIComponent(palavrasChave + ", Paraíba");
-                
-                const respostaAmpla = await fetch(urlAmpla, { headers: { 'User-Agent': 'CalculadoraFreteZeny/8.0' } });
-                dados = await respostaAmpla.json();
-            }
-
             if (dados && dados.length > 0) {
                 const cidadesPermitidas = ['joão pessoa', 'bayeux', 'santa rita', 'cabedelo'];
                 
@@ -168,11 +158,10 @@
                         return { lat: parseFloat(item.lat), lon: parseFloat(item.lon) };
                     }
                 }
-                return null;
             }
             return null;
         } catch (e) {
-            console.error("Erro na geocodificação com tolerância:", e);
+            console.error("Erro na geocodificação:", e);
             return null;
         }
     }
@@ -215,7 +204,7 @@
         btnCalcular.disabled = true;
         btnCalcular.textContent = 'Calculando... ⏳';
         divResultado.style.display = 'block';
-        divResultado.innerHTML = 'Buscando endereço exato e calculando melhor rota... ⏳';
+        divResultado.innerHTML = 'Buscando endereço e calculando rota... ⏳';
 
         try {
             const destino = await geocodificar(enderecoCliente);
@@ -230,7 +219,7 @@
 
             if (chaveLojaSelecionada === 'auto') {
                 foiAutomatico = true;
-                divResultado.innerHTML = 'Verificando qual das 4 lojas está mais próxima... ⚡';
+                divResultado.innerHTML = 'Verificando loja mais próxima... ⚡';
                 chaveLojaSelecionada = await encontrarLojaMaisProxima(destino);
             }
 
