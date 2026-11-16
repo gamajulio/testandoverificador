@@ -11,13 +11,32 @@
     <style>
         body { font-family: Arial, sans-serif; background-color: #f4f4f9; margin: 0; padding: 20px; display: flex; justify-content: center; }
         .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 100%; max-width: 600px; }
-        h2 { color: #333; text-align: center; }
-        .form-group { margin-bottom: 15px; }
+        h2 { color: #333; text-align: center; margin-top: 0; }
+        .form-group { margin-bottom: 15px; position: relative; }
         label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
-        input[type="text"], select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background-color: #28a745; color: white; border: none; padding: 10px 15px; width: 100%; border-radius: 4px; font-size: 16px; cursor: pointer; }
+        input[type="text"], select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 15px; }
+        button { background-color: #28a745; color: white; border: none; padding: 12px 15px; width: 100%; border-radius: 4px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background-color 0.2s; }
         button:hover { background-color: #218838; }
+        button:disabled { background-color: #94d3a2; cursor: not-allowed; }
+        
+        /* Lista de Autocompletar */
+        #sugestoes { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; max-height: 200px; overflow-y: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: none; }
+        .sugestao-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 14px; color: #333; }
+        .sugestao-item:last-child { border-bottom: none; }
+        .sugestao-item:hover { background-color: #f0f8ff; }
+
+        /* Resultado e Botão Copiar */
         #resultado { margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; display: none; font-size: 16px; line-height: 1.5; }
+        .btn-copiar { background-color: #25D366; color: white; margin-top: 12px; font-size: 15px; padding: 10px; }
+        .btn-copiar:hover { background-color: #1ebe57; }
+        
+        /* Histórico Recente */
+        #historico-container { margin-top: 15px; display: none; border-top: 1px solid #eee; padding-top: 10px; }
+        .historico-titulo { font-size: 13px; color: #777; font-weight: bold; margin-bottom: 8px; }
+        .historico-lista { display: flex; flex-wrap: wrap; gap: 6px; }
+        .historico-chip { background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 15px; padding: 5px 12px; font-size: 13px; color: #495057; cursor: pointer; transition: background 0.2s; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .historico-chip:hover { background: #e2e6ea; }
+
         #map { height: 350px; margin-top: 15px; border-radius: 4px; display: none; }
         .leaflet-routing-container { display: none !important; }
     </style>
@@ -27,10 +46,11 @@
 <div class="container">
     <h2>Calculadora de Taxa de Entrega - Zeny</h2>
     
-    <!-- Menu suspenso para selecionar a loja de origem -->
+    <!-- Menu suspenso com opção automática -->
     <div class="form-group">
         <label for="lojaOrigem">Selecione a Loja de Origem:</label>
         <select id="lojaOrigem">
+            <option value="auto">⚡ Automático (Loja Mais Próxima)</option>
             <option value="centro">Centro - Av. Camilo De Holanda, 19</option>
             <option value="manaira">Manaíra - Av. Gov. Flávio Ribeiro Coutinho, 805</option>
             <option value="mangabeira">Mangabeira - Av. Hilton Souto Maior, 3901</option>
@@ -39,11 +59,18 @@
     </div>
 
     <div class="form-group">
-        <label for="endereco">Endereço do Cliente (aperte Enter para calcular):</label>
-        <input type="text" id="endereco" placeholder="Ex: Av. Epitácio Pessoa, 500, João Pessoa">
+        <label for="endereco">Endereço do Cliente (digite para sugestões ou aperte Enter):</label>
+        <input type="text" id="endereco" autocomplete="off" placeholder="Ex: Av. Epitácio Pessoa, 500, João Pessoa">
+        <div id="sugestoes"></div>
     </div>
     
     <button id="btnCalcular">Calcular Rota e Taxa</button>
+
+    <!-- Histórico dos últimos 3 endereços -->
+    <div id="historico-container">
+        <div class="historico-titulo">🕒 Consultas recentes:</div>
+        <div class="historico-lista" id="historico-lista"></div>
+    </div>
 
     <div id="resultado"></div>
     <div id="map"></div>
@@ -53,7 +80,6 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
 <script>
-    // Função auxiliar para gerar a tabela de 1 a 40 km para cada loja
     function gerarTabelaCompleta() {
         let tabela = [
             { limite: 1, valor: 7 }, { limite: 2, valor: 8 }, { limite: 3, valor: 10 }, { limite: 4, valor: 11 },
@@ -65,7 +91,7 @@
         
         let ultimoValor = 34;
         for (let km = 21; km <= 40; km++) {
-            ultimoValor += 2; // Adiciona R$ 2,00 a cada km a partir de 21
+            ultimoValor += 2;
             tabela.push({ limite: km, valor: ultimoValor });
         }
         return tabela;
@@ -73,52 +99,177 @@
 
     const tabelaCompartilhada = gerarTabelaCompleta();
 
-    // Configuração das 4 lojas com a nova tabela estendida até 40 km
     const LOJAS_DADOS = {
         centro: {
             nome: "Loja Centro",
-            lat: -7.120783231036084, 
-            lon: -34.878187390267904,
+            nomeCurto: "Centro",
+            lat: -7.12046060376896, 
+            lon: -34.877878247696444,
             tabela: tabelaCompartilhada
         },
         manaira: {
             nome: "Loja Manaíra",
-            lat: -7.098603460169281, 
-            lon: -34.844245411037924,
+            nomeCurto: "Manaíra",
+            lat: -7.098598434812225, 
+            lon: -34.84490290351551,
             tabela: tabelaCompartilhada
         },
         mangabeira: {
             nome: "Loja Mangabeira",
-            lat: -7.163214354378254, 
-            lon: -34.83076965795877,
+            lat: -7.161946461084374, 
+            lon: -34.83044736118659,
+            nomeCurto: "Mangabeira",
             tabela: tabelaCompartilhada
         },
         bessa: {
             nome: "Loja Bessa",
-            lat: -7.064204184127133, 
-            lon: -34.841690084166466,
+            nomeCurto: "Bessa",
+            lat: -7.064009913287581, 
+            lon: -34.84173194584224,
             tabela: tabelaCompartilhada
         }
     };
 
     let map = null;
     let routingControl = null;
+    let coordenadaSelecionadaAutocomplete = null;
+    let timeoutAutocomplete = null;
+    let historicoConsultas = JSON.parse(localStorage.getItem('zeny_historico_fretes') || '[]');
 
     document.addEventListener("DOMContentLoaded", function() {
-        document.getElementById("btnCalcular").addEventListener("click", calcularFrete);
-        document.getElementById("endereco").addEventListener("keydown", function(event) {
+        const inputEndereco = document.getElementById("endereco");
+        const divSugestoes = document.getElementById("sugestoes");
+        const btnCalcular = document.getElementById("btnCalcular");
+
+        renderizarHistorico();
+
+        btnCalcular.addEventListener("click", () => iniciarCalculo());
+
+        inputEndereco.addEventListener("keydown", function(event) {
             if (event.key === 'Enter' || event.keyCode === 13) {
                 event.preventDefault();
-                calcularFrete();
+                divSugestoes.style.display = 'none';
+                iniciarCalculo();
+            }
+        });
+
+        // 1. Autocompletar com Photon API (focado na Grande João Pessoa)
+        inputEndereco.addEventListener("input", function() {
+            coordenadaSelecionadaAutocomplete = null;
+            const termo = this.value.trim();
+            clearTimeout(timeoutAutocomplete);
+
+            if (termo.length < 4) {
+                divSugestoes.style.display = 'none';
+                return;
+            }
+
+            timeoutAutocomplete = setTimeout(async () => {
+                try {
+                    // Bias geográfico centralizado em João Pessoa (lat -7.1195, lon -34.8450)
+                    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(termo)}&lat=-7.1195&lon=-34.8450&limit=5`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+
+                    divSugestoes.innerHTML = '';
+                    if (data.features && data.features.length > 0) {
+                        const cidadesPermitidas = ['joão pessoa', 'bayeux', 'santa rita', 'cabedelo'];
+                        const filtrados = data.features.filter(f => {
+                            const cidade = (f.properties.city || f.properties.town || f.properties.municipality || '').toLowerCase();
+                            const estado = (f.properties.state || '').toLowerCase();
+                            return estado.includes('paraíba') || cidadesPermitidas.some(c => cidade.includes(c));
+                        });
+
+                        const listaFinal = filtrados.length > 0 ? filtrados : data.features;
+
+                        listaFinal.forEach(item => {
+                            const props = item.properties;
+                            const partes = [
+                                props.street || props.name,
+                                props.housenumber,
+                                props.district || props.suburb,
+                                props.city || props.town
+                            ].filter(Boolean);
+                            
+                            const textoFormatado = partes.join(', ');
+                            if (!textoFormatado) return;
+
+                            const div = document.createElement('div');
+                            div.className = 'sugestao-item';
+                            div.textContent = textoFormatado;
+                            div.addEventListener('click', () => {
+                                inputEndereco.value = textoFormatado;
+                                coordenadaSelecionadaAutocomplete = {
+                                    lat: item.geometry.coordinates[1],
+                                    lon: item.geometry.coordinates[0]
+                                };
+                                divSugestoes.style.display = 'none';
+                                iniciarCalculo();
+                            });
+                            divSugestoes.appendChild(div);
+                        });
+                        divSugestoes.style.display = divSugestoes.children.length > 0 ? 'block' : 'none';
+                    } else {
+                        divSugestoes.style.display = 'none';
+                    }
+                } catch (e) {
+                    console.error("Erro no autocompletar:", e);
+                }
+            }, 350);
+        });
+
+        // Fechar sugestões ao clicar fora
+        document.addEventListener("click", function(e) {
+            if (!inputEndereco.contains(e.target) && !divSugestoes.contains(e.target)) {
+                divSugestoes.style.display = 'none';
             }
         });
     });
 
+    function salvarNoHistorico(endereco, coords) {
+        historicoConsultas = historicoConsultas.filter(item => item.endereco.toLowerCase() !== endereco.toLowerCase());
+        historicoConsultas.unshift({ endereco, coords });
+        if (historicoConsultas.length > 3) historicoConsultas.pop();
+        localStorage.setItem('zeny_historico_fretes', JSON.stringify(historicoConsultas));
+        renderizarHistorico();
+    }
+
+    function renderizarHistorico() {
+        const container = document.getElementById('historico-container');
+        const lista = document.getElementById('historico-lista');
+        
+        if (historicoConsultas.length === 0) {
+            container.style.display = 'none';
+            return;
+        }
+
+        container.style.display = 'block';
+        lista.innerHTML = '';
+        historicoConsultas.forEach(item => {
+            const chip = document.createElement('div');
+            chip.className = 'historico-chip';
+            chip.textContent = item.endereco;
+            chip.title = item.endereco;
+            chip.addEventListener('click', () => {
+                document.getElementById('endereco').value = item.endereco;
+                coordenadaSelecionadaAutocomplete = item.coords;
+                iniciarCalculo();
+            });
+            lista.appendChild(chip);
+        });
+    }
+
     async function geocodificar(endereco) {
-        const queryCompleta = endereco.toLowerCase().includes('joão pessoa') || endereco.toLowerCase().includes('bayeux') || endereco.toLowerCase().includes('santa rita') || endereco.toLowerCase().includes('cabedelo') ? endereco : endereco + ", Paraíba";
+        if (coordenadaSelecionadaAutocomplete) {
+            return coordenadaSelecionadaAutocomplete;
+        }
+        const cidades = ['joão pessoa', 'bayeux', 'santa rita', 'cabedelo'];
+        const temCidade = cidades.some(c => endereco.toLowerCase().includes(c));
+        const queryCompleta = temCidade ? endereco : endereco + ", Paraíba";
         const url = `https://nominatim.openstreetmap.org/search?format=json&q=` + encodeURIComponent(queryCompleta);
+        
         try {
-            const resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/1.0' } });
+            const resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/2.0' } });
             const dados = await resposta.json();
             if (dados && dados.length > 0) {
                 return { lat: parseFloat(dados[0].lat), lon: parseFloat(dados[0].lon) };
@@ -130,11 +281,35 @@
         }
     }
 
-    async function calcularFrete() {
-        const chaveLojaSelecionada = document.getElementById('lojaOrigem').value;
-        const dadosLoja = LOJAS_DADOS[chaveLojaSelecionada];
+    // 3. Descobrir loja mais próxima usando a API Table/Route do OSRM em paralelo
+    async function encontrarLojaMaisProxima(destino) {
+        const chaves = Object.keys(LOJAS_DADOS);
+        const promessas = chaves.map(async (chave) => {
+            const loja = LOJAS_DADOS[chave];
+            const url = `https://router.project-osrm.org/route/v1/driving/${loja.lon},${loja.lat};${destino.lon},${destino.lat}?overview=false`;
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.routes && data.routes.length > 0) {
+                    return { chave, distancia: data.routes[0].distance };
+                }
+            } catch (e) {
+                console.error(`Erro ao consultar distância para ${loja.nome}:`, e);
+            }
+            return { chave, distancia: Infinity };
+        });
 
-        const enderecoCliente = document.getElementById('endereco').value;
+        const resultados = await Promise.all(promessas);
+        resultados.sort((a, b) => a.distancia - b.distancia);
+        return resultados[0].distancia !== Infinity ? resultados[0].chave : 'centro';
+    }
+
+    async function iniciarCalculo() {
+        const btnCalcular = document.getElementById('btnCalcular');
+        // 5. Proteção contra cliques duplos
+        if (btnCalcular.disabled) return;
+
+        const enderecoCliente = document.getElementById('endereco').value.trim();
         const divResultado = document.getElementById('resultado');
         const divMap = document.getElementById('map');
 
@@ -143,94 +318,102 @@
             return;
         }
 
+        btnCalcular.disabled = true;
+        btnCalcular.textContent = 'Calculando... ⏳';
         divResultado.style.display = 'block';
-        divResultado.innerHTML = `Calculando trajeto saindo de <strong>${dadosLoja.nome}</strong>... ⏳`;
+        divResultado.innerHTML = 'Buscando endereço e calculando melhor rota... ⏳';
 
-        const origem = { lat: dadosLoja.lat, lon: dadosLoja.lon };
-        const destino = await geocodificar(enderecoCliente);
+        try {
+            const destino = await geocodificar(enderecoCliente);
 
-        if (!destino) {
-            divResultado.innerHTML = '❌ Não foi possível encontrar o endereço do cliente. Tente especificar incluindo o bairro e a cidade.';
-            return;
-        }
-
-        divMap.style.display = 'block';
-
-        if (!map) {
-            map = L.map('map').setView([origem.lat, origem.lon], 13);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; OpenStreetMap contributors'
-            }).addTo(map);
-        } else {
-            map.setView([origem.lat, origem.lon], 13);
-        }
-
-        if (routingControl) {
-            map.removeControl(routingControl);
-        }
-
-        routingControl = L.Routing.control({
-            waypoints: [
-                L.latLng(origem.lat, origem.lon),
-                L.latLng(destino.lat, destino.lon)
-            ],
-            router: new L.Routing.osrmv1({
-                serviceUrl: 'https://router.project-osrm.org/route/v1'
-            }),
-            routeWhileDragging: false,
-            showAlternatives: false,
-            fitSelectedRoutes: true,
-            language: 'pt',
-            lineOptions: { 
-                styles: [{ color: '#007bff', opacity: 0.8, weight: 6 }] 
-            },
-            createMarker: function(i, wp) {
-                return L.marker(wp.latLng).bindPopup(i === 0 ? dadosLoja.nome : "Cliente");
-            }
-        }).addTo(map);
-
-        routingControl.on('routesfound', function(e) {
-            const rotas = e.routes;
-            const distanciaMetros = rotas[0].summary.totalDistance;
-            const distanciaKm = distanciaMetros / 1000;
-
-            // Validação de limite máximo estendido para 40 km
-            if (distanciaKm > 40) {
-                divResultado.innerHTML = `
-                    🏪 <strong>Origem:</strong> ${dadosLoja.nome}<br>
-                    📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
-                    ❌ <strong>Consulta indisponível devido distância, contate Júlio para mais informações</strong>
-                `;
+            if (!destino) {
+                divResultado.innerHTML = '❌ Não foi possível encontrar o endereço do cliente. Tente selecionar uma sugestão ou incluir o bairro e a cidade.';
                 return;
             }
 
-            let taxaOnline = 0;
-            // Arredonda o km para cima para buscar na faixa correspondente (ex: 21.3 km cai na regra de 22 km)
-            const kmArredondado = Math.ceil(distanciaKm);
-            
-            for (let faixa of dadosLoja.tabela) {
-                if (kmArredondado <= faixa.limite) {
-                    taxaOnline = faixa.valor;
-                    break;
-                }
+            salvarNoHistorico(enderecoCliente, destino);
+
+            let chaveLojaSelecionada = document.getElementById('lojaOrigem').value;
+            let foiAutomatico = false;
+
+            if (chaveLojaSelecionada === 'auto') {
+                foiAutomatico = true;
+                divResultado.innerHTML = 'Verificando qual das 4 lojas está mais próxima... ⚡';
+                chaveLojaSelecionada = await encontrarLojaMaisProxima(destino);
             }
 
-            let taxaComRetorno = Math.ceil(taxaOnline * 1.30);
+            const dadosLoja = LOJAS_DADOS[chaveLojaSelecionada];
+            const origem = { lat: dadosLoja.lat, lon: dadosLoja.lon };
 
-            divResultado.innerHTML = `
-                🏪 <strong>Origem:</strong> ${dadosLoja.nome}<br>
-                📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
-                🔄 <strong>Taxa de Entrega com Retorno:</strong> R$ ${taxaComRetorno.toFixed(2)}<br>
-                💻 <strong>Taxa de Entrega Online:</strong> R$ ${taxaOnline.toFixed(2)}
-            `;
-        });
+            divMap.style.display = 'block';
 
-        routingControl.on('routingerror', function(e) {
-            console.error("Erro no OSRM Routing:", e);
-            divResultado.innerHTML = '❌ Erro ao calcular o trajeto nas ruas. Verifique se o endereço do cliente possui acesso viário válido.';
-        });
-    }
-</script>
+            if (!map) {
+                map = L.map('map').setView([origem.lat, origem.lon], 13);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(map);
+            } else {
+                map.setView([origem.lat, origem.lon], 13);
+            }
 
-</body>
-</html>
+            if (routingControl) {
+                map.removeControl(routingControl);
+            }
+
+            routingControl = L.Routing.control({
+                waypoints: [
+                    L.latLng(origem.lat, origem.lon),
+                    L.latLng(destino.lat, destino.lon)
+                ],
+                router: new L.Routing.osrmv1({
+                    serviceUrl: 'https://router.project-osrm.org/route/v1'
+                }),
+                routeWhileDragging: false,
+                showAlternatives: false,
+                fitSelectedRoutes: true,
+                language: 'pt',
+                lineOptions: { 
+                    styles: [{ color: '#007bff', opacity: 0.8, weight: 6 }] 
+                },
+                createMarker: function(i, wp) {
+                    return L.marker(wp.latLng).bindPopup(i === 0 ? dadosLoja.nome : "Cliente");
+                }
+            }).addTo(map);
+
+            routingControl.on('routesfound', function(e) {
+                const rotas = e.routes;
+                const distanciaMetros = rotas[0].summary.totalDistance;
+                const distanciaKm = distanciaMetros / 1000;
+
+                if (distanciaKm > 40) {
+                    divResultado.innerHTML = `
+                        🏪 <strong>Origem:</strong> ${dadosLoja.nome}${foiAutomatico ? '(Mais próxima)' : ''}<br>
+                        📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
+                        ❌ <strong>Consulta indisponível devido distância, contate Júlio para mais informações</strong>
+                    `;
+                    return;
+                }
+
+                let taxaOnline = 0;
+                const kmArredondado = Math.ceil(distanciaKm);
+                
+                for (let faixa of dadosLoja.tabela) {
+                    if (kmArredondado <= faixa.limite) {
+                        taxaOnline = faixa.valor;
+                        break;
+                    }
+                }
+
+                let taxaComRetorno = Math.ceil(taxaOnline * 1.30);
+
+                // 2. Mensagem padronizada para WhatsApp
+                const valorRetornoFormatado = taxaComRetorno.toFixed(2).replace('.', ',');
+                const valorOnlineFormatado = taxaOnline.toFixed(2).replace('.', ',');
+                const textoWhatsApp = `Sairá da unidade do ${dadosLoja.nomeCurto}. A taxa fica R$ ${valorRetornoFormatado} e por apenas R$ ${valorOnlineFormatado} se o pedido for pago todo via pix antecipadamente!`;
+
+                divResultado.innerHTML = `
+                    🏪 <strong>Origem:</strong> ${dadosLoja.nome}${foiAutomatico ? '⚡ <em>(Mais próxima)</em>' : ''}<br>
+                    📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
+                    🔄 <strong>Taxa de Entrega com Retorno:</strong> R$ ${valorRetornoFormatado}<br>
+                    💻 <strong>Taxa de Entrega Online:</strong> R$ ${valorOnlineFormatado}
+                    <button type="
