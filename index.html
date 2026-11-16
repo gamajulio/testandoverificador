@@ -12,19 +12,13 @@
         body { font-family: Arial, sans-serif; background-color: #f4f4f9; margin: 0; padding: 20px; display: flex; justify-content: center; }
         .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 100%; max-width: 600px; }
         h2 { color: #333; text-align: center; margin-top: 0; }
-        .form-group { margin-bottom: 15px; position: relative; }
+        .form-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
         input[type="text"], select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 15px; }
         button { background-color: #28a745; color: white; border: none; padding: 12px 15px; width: 100%; border-radius: 4px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background-color 0.2s; }
         button:hover { background-color: #218838; }
         button:disabled { background-color: #94d3a2; cursor: not-allowed; }
         
-        /* Lista de Autocompletar */
-        #sugestoes { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; max-height: 220px; overflow-y: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: none; }
-        .sugestao-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 14px; color: #333; }
-        .sugestao-item:last-child { border-bottom: none; }
-        .sugestao-item:hover { background-color: #f0f8ff; }
-
         /* Resultado e Botão Copiar */
         #resultado { margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px; display: none; font-size: 16px; line-height: 1.5; }
         .btn-copiar { background-color: #25D366; color: white; margin-top: 12px; font-size: 15px; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; }
@@ -59,9 +53,8 @@
     </div>
 
     <div class="form-group">
-        <label for="endereco">Endereço do Cliente (digite com o número e selecione):</label>
-        <input type="text" id="endereco" autocomplete="off" placeholder="Ex: Av. Epitácio Pessoa, 500">
-        <div id="sugestoes"></div>
+        <label for="endereco">Endereço do Cliente (com número e bairro, aperte Enter):</label>
+        <input type="text" id="endereco" autocomplete="off" placeholder="Ex: Av. Epitácio Pessoa, 500, Tambauzinho">
     </div>
     
     <button id="btnCalcular">Calcular Rota e Taxa</button>
@@ -132,13 +125,10 @@
 
     let map = null;
     let routingControl = null;
-    let coordenadaSelecionadaAutocomplete = null;
-    let timeoutAutocomplete = null;
     let historicoConsultas = JSON.parse(localStorage.getItem('zeny_historico_fretes') || '[]');
 
     document.addEventListener("DOMContentLoaded", function() {
         const inputEndereco = document.getElementById("endereco");
-        const divSugestoes = document.getElementById("sugestoes");
         const btnCalcular = document.getElementById("btnCalcular");
 
         renderizarHistorico();
@@ -148,73 +138,7 @@
         inputEndereco.addEventListener("keydown", function(event) {
             if (event.key === 'Enter' || event.keyCode === 13) {
                 event.preventDefault();
-                divSugestoes.style.display = 'none';
                 iniciarCalculo();
-            }
-        });
-
-        // Autocompletar aprimorado para forçar a busca considerando o número e a localidade
-        inputEndereco.addEventListener("input", function() {
-            coordenadaSelecionadaAutocomplete = null;
-            const termo = this.value.trim();
-            clearTimeout(timeoutAutocomplete);
-
-            if (termo.length < 3) {
-                divSugestoes.style.display = 'none';
-                return;
-            }
-
-            timeoutAutocomplete = setTimeout(async () => {
-                try {
-                    // Adiciona Paraíba na busca se não houver cidade/estado especificado para refinar
-                    const query = termo.toLowerCase().includes('paraíba') ? termo : termo + ", Paraíba";
-                    const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=` + encodeURIComponent(query) + `&limit=6`;
-                    const res = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/4.0' } });
-                    const dados = await res.json();
-
-                    divSugestoes.innerHTML = '';
-                    if (dados && dados.length > 0) {
-                        dados.forEach(item => {
-                            const addr = item.address || {};
-                            const rua = addr.road || addr.pedestrian || addr.residential || '';
-                            const numero = addr.house_number ? `, ${addr.house_number}` : '';
-                            const bairro = addr.suburb || addr.neighbourhood || addr.city_district || '';
-                            const cidade = addr.city || addr.town || addr.municipality || '';
-
-                            // Monta um texto limpo e legível destacando o número caso exista
-                            let textoFormatado = item.display_name;
-                            if (rua) {
-                                textoFormatado = `${rua}${numero}${bairro ? ' - ' + bairro : ''}${cidade ? ' - ' + cidade : ''}`;
-                            }
-
-                            const div = document.createElement('div');
-                            div.className = 'sugestao-item';
-                            div.textContent = textoFormatado;
-                            div.addEventListener('click', () => {
-                                inputEndereco.value = textoFormatado;
-                                coordenadaSelecionadaAutocomplete = {
-                                    lat: parseFloat(item.lat),
-                                    lon: parseFloat(item.lon)
-                                };
-                                divSugestoes.style.display = 'none';
-                                iniciarCalculo();
-                            });
-                            divSugestoes.appendChild(div);
-                        });
-                        divSugestoes.style.display = 'block';
-                    } else {
-                        divSugestoes.style.display = 'none';
-                    }
-                } catch (e) {
-                    console.error("Erro no autocompletar:", e);
-                }
-            }, 350);
-        });
-
-        // Fechar sugestões ao clicar fora
-        document.addEventListener("click", function(e) {
-            if (!inputEndereco.contains(e.target) && !divSugestoes.contains(e.target)) {
-                divSugestoes.style.display = 'none';
             }
         });
     });
@@ -245,7 +169,6 @@
             chip.title = item.endereco;
             chip.addEventListener('click', () => {
                 document.getElementById('endereco').value = item.endereco;
-                coordenadaSelecionadaAutocomplete = item.coords;
                 iniciarCalculo();
             });
             lista.appendChild(chip);
@@ -253,14 +176,11 @@
     }
 
     async function geocodificar(endereco) {
-        if (coordenadaSelecionadaAutocomplete) {
-            return coordenadaSelecionadaAutocomplete;
-        }
-        const queryCompleta = endereco.toLowerCase().includes('paraíba') ? endereco : endereco + ", Paraíba";
+        const queryCompleta = endereco.toLowerCase().includes('paraíba') || endereco.toLowerCase().includes('pb') ? endereco : endereco + ", Paraíba";
         const url = `https://nominatim.openstreetmap.org/search?format=json&q=` + encodeURIComponent(queryCompleta);
         
         try {
-            const resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/4.0' } });
+            const resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/5.0' } });
             const dados = await resposta.json();
             if (dados && dados.length > 0) {
                 return { lat: parseFloat(dados[0].lat), lon: parseFloat(dados[0].lon) };
@@ -317,7 +237,7 @@
             const destino = await geocodificar(enderecoCliente);
 
             if (!destino) {
-                divResultado.innerHTML = '❌ Não foi possível encontrar o endereço exato. Tente selecionar uma sugestão da lista.';
+                divResultado.innerHTML = '❌ Não foi possível encontrar o endereço. Tente digitar incluindo o número, bairro e cidade (Ex: Av. Epitácio Pessoa, 500, João Pessoa).';
                 return;
             }
 
@@ -377,7 +297,7 @@
 
                 if (distanciaKm > 40) {
                     divResultado.innerHTML = `
-                        🏪 <strong>Origem:</strong> ${dadosLoja.nome}${foiAutomatico ? '(Mais próxima)' : ''}<br>
+                        🏪 <strong>Origem:</strong> ${dadosLoja.nome} ${foiAutomatico ? '(Mais próxima)' : ''}<br>
                         📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
                         ❌ <strong>Consulta indisponível devido distância, contate Júlio para mais informações</strong>
                     `;
@@ -401,4 +321,39 @@
                 const textoWhatsApp = `Sairá da unidade do ${dadosLoja.nomeCurto}. A taxa fica R$ ${valorRetornoFormatado} e por apenas R$ ${valorOnlineFormatado} se o pedido for pago todo via pix antecipadamente!`;
 
                 divResultado.innerHTML = `
-                    🏪 <strong>Origem:</strong> ${dadosLo
+                    🏪 <strong>Origem:</strong> ${dadosLoja.nome} ${foiAutomatico ? '⚡ <em>(Mais próxima)</em>' : ''}<br>
+                    📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
+                    🔄 <strong>Taxa de Entrega com Retorno:</strong> R$ ${valorRetornoFormatado}<br>
+                    💻 <strong>Taxa de Entrega Online:</strong> R$ ${valorOnlineFormatado}
+                    <button type="button" class="btn-copiar" id="btnCopiarWhats">📋 Copiar Orçamento para WhatsApp</button>
+                `;
+
+                document.getElementById('btnCopiarWhats').addEventListener('click', function() {
+                    navigator.clipboard.writeText(textoWhatsApp).then(() => {
+                        const btn = this;
+                        btn.textContent = '✅ Copiado! Cole no WhatsApp';
+                        btn.style.backgroundColor = '#128C7E';
+                        setTimeout(() => {
+                            btn.textContent = '📋 Copiar Orçamento para WhatsApp';
+                            btn.style.backgroundColor = '#25D366';
+                        }, 2500);
+                    });
+                });
+            });
+
+            routingControl.on('routingerror', function(e) {
+                console.error("Erro no OSRM Routing:", e);
+                divResultado.innerHTML = '❌ Erro ao calcular o trajeto nas ruas. Verifique se o endereço do cliente possui acesso viário válido.';
+            });
+
+        } finally {
+            setTimeout(() => {
+                btnCalcular.disabled = false;
+                btnCalcular.textContent = 'Calcular Rota e Taxa';
+            }, 1000);
+        }
+    }
+</script>
+
+</body>
+</html>
