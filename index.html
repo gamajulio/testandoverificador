@@ -132,17 +132,73 @@
     async function geocodificar(enderecoOriginal) {
         let textoBusca = enderecoOriginal.trim();
 
-        // Verifica se o usuário digitou um CEP (ex: 58040-000 ou 58040000)
-        const matchCep = textoBusca.match(/\b(\d{5})-?(\d{3})\b/);
+        // 1. Detecção e tratamento de CEP (com ou sem hífen, ex: 58039010 ou 58039-010)
+        const matchCep = textoBusca.match(/\b\d{5}-?\d{3}\b/);
         
         if (matchCep) {
-            const cepLimpo = matchCep[1] + matchCep[2];
+            const cepLimpo = matchCep[0].replace('-', '');
             const complementoNumero = textoBusca.replace(matchCep[0], '').replace(/^[,\s-]+/, '').trim();
 
             try {
-                const resCep = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
-                const dadosCep = await resCep.json();
+                const resCep = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`); const dadosCep = await resCep.json();  if (!dadosCep.erro) { let rua = dadosCep.logradouro \vert{}\vert{} ''; let bairro = dadosCep.bairro \vert{}\vert{} ''; let cidade = dadosCep.localidade \vert{}\vert{} 'João Pessoa'; let uf = dadosCep.uf \vert{}\vert{} 'PB';  if (rua) { textoBusca = `${rua}${complementoNumero ? ', ' + complementoNumero : ''}, ${bairro}, ${cidade} -${uf}`;
+                    } else {
+                        textoBusca = `${complementoNumero ? complementoNumero + ', ' : ''}${bairro ? bairro + ', ' : ''}${cidade} -${uf}`;
+                    }
+                }
+            } catch (err) {
+                console.warn("Aviso: Falha na consulta do ViaCEP, seguindo com o texto original...", err);
+            }
+        }
 
-                if (!dadosCep.erro && dadosCep.logradouro) {
-                    textoBusca = `${dadosCep.logradouro}${complementoNumero ? ', ' + complementoNumero : ''}, ${dadosCep.bairro}, ${dadosCep.localidade} - ${dadosCep.uf}`;
-                } else if (!dadosCep
+        // 2. Padronização de abreviações e busca no Nominatim
+        let enderecoTratado = textoBusca
+            .replace(/\b(av|av\.)\b/gi, "Avenida")
+            .replace(/\b(r|r\.)\b/gi, "Rua")
+            .replace(/\b(tr|trav\.)\b/gi, "Travessa")
+            .trim();
+
+        const temLocalidade = /joão pessoa|bayeux|santa rita|cabedelo|pb/i.test(enderecoTratado);
+        const queryCompleta = temLocalidade ? enderecoTratado : enderecoTratado + ", Paraíba";
+
+        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=3&q=` + encodeURIComponent(queryCompleta);
+        
+        try {
+            const resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/12.1' } });
+            const dados = await resposta.json();
+            
+            if (dados && dados.length > 0) {
+                const cidadesPermitidas = ['joão pessoa', 'bayeux', 'santa rita', 'cabedelo'];
+                
+                for (let item of dados) {
+                    const addr = item.address || {};
+                    const cidade = (addr.city || addr.town || addr.municipality || addr.city_district || '').toLowerCase();
+                    
+                    if (cidadesPermitidas.some(cidadeValida => cidade.includes(cidadeValida))) {
+                        return { 
+                            lat: parseFloat(item.lat), 
+                            lon: parseFloat(item.lon),
+                            nomeCompleto: item.display_name
+                        };
+                    }
+                }
+            }
+            return null;
+        } catch (e) {
+            console.error("Erro na geocodificação:", e);
+            return null;
+        }
+    }
+
+    async function encontrarLojaMaisProxima(destino) {
+        const chaves = Object.keys(LOJAS_DADOS);
+        const promessas = chaves.map(async (chave) => {
+            const loja = LOJAS_DADOS[chave];
+            const url = `https://router.project-osrm.org/route/v1/driving/${loja.lon},${loja.lat};${destino.lon},${destino.lat}?overview=false`;
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.routes && data.routes.length > 0) {
+                    return { chave, distancia: data.routes[0].distance };
+                }
+            } catch (e) {
+                console.error(`Erro ao
