@@ -117,6 +117,8 @@
         const inputEndereco = document.getElementById("endereco");
         const btnCalcular = document.getElementById("btnCalcular");
 
+        localStorage.removeItem('zeny_historico_fretes');
+
         btnCalcular.addEventListener("click", () => iniciarCalculo());
 
         inputEndereco.addEventListener("keydown", function(event) {
@@ -128,44 +130,71 @@
     });
 
     async function geocodificar(enderecoOriginal) {
-        let limpo = enderecoOriginal.trim();
-        
-        // Garante que se o usuário não digitou a cidade, o script complementa para fixar na região metropolitana
-        const temCidade = /joão pessoa|bayeux|santa rita|cabedelo/i.test(limpo);
-        const queryFinal = temCidade ? limpo : `${limpo}, João Pessoa, PB`;
+        let enderecoTratado = enderecoOriginal
+            .replace(/\b(av|av\.)\b/gi, "Avenida")
+            .replace(/\b(r|r\.)\b/gi, "Rua")
+            .replace(/\b(tr|trav\.)\b/gi, "Travessa")
+            .trim();
 
-        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=10&countrycodes=br&q=` + encodeURIComponent(queryFinal);
+        // Extrai o número do endereço usando Regex (procura por vírgula seguida de números)
+        let matchNumero = enderecoTratado.match(/,\s*(\d+[a-zA-Z]?)\b/);
+        let numeroExtraido = matchNumero ? matchNumero[1] : null;
 
-        try {
-            const resposta = await fetch(url, { headers: { 'User-Agent': 'ZenyCalculadoraFrete/13.0' } });
-            const resultados = await resposta.json();
-
-            if (!resultados || resultados.length === 0) return null;
-
-            // Filtro estrito para garantir que o resultado caia nas cidades permitidas da região
-            const cidadesValidas = ['joão pessoa', 'bayeux', 'santa rita', 'cabedelo'];
-
-            for (let r of resultados) {
-                const addr = r.address || {};
-                const cidadeEncontrada = (addr.city || addr.town || addr.municipality || addr.city_district || addr.suburb || '').toLowerCase();
-                const textoCompleto = r.display_name.toLowerCase();
-
-                if (cidadesValidas.some(c => cidadeEncontrada.includes(c) || textoCompleto.includes(c))) {
+        // Se encontrou o número, tentamos primeiro a busca estruturada parâmetros por parâmetros (muito mais precisa para achar o ponto exato na rua)
+        if (numeroExtraido) {
+            // Remove o número da string da rua para isolar o nome da via
+            let ruaSemNumero = enderecoTratado.replace(/,\s*\d+[a-zA-Z]?\b/, '').trim();
+            let urlEstruturada = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=5&countrycodes=br&city=João+Pessoa&street=${encodeURIComponent(ruaSemNumero)}&house_number=${encodeURIComponent(numeroExtraido)}`;
+            
+            try {
+                let res = await fetch(urlEstruturada, { headers: { 'User-Agent': 'CalculadoraFreteZeny/12.0' } });
+                let dadosEstruturados = await res.json();
+                if (dadosEstruturados && dadosEstruturados.length > 0) {
                     return {
-                        lat: parseFloat(r.lat),
-                        lon: parseFloat(r.lon),
-                        nomeCompleto: r.display_name
+                        lat: parseFloat(dadosEstruturados[0].lat),
+                        lon: parseFloat(dadosEstruturados[0].lon),
+                        nomeCompleto: dadosEstruturados[0].display_name
                     };
                 }
+            } catch (err) {
+                console.warn("Busca estruturada falhou, tentando método padrão...", err);
             }
+        }
 
-            // Se nenhum bateu exatamente com a cidade nos metadados, retorna o primeiro resultado geográfico válido para não travar
-            return {
-                lat: parseFloat(resultados[0].lat),
-                lon: parseFloat(resultados[0].lon),
-                nomeCompleto: resultados[0].display_name
-            };
+        // Método Padrão (Fallback caso a busca estruturada venha vazia)
+        const temLocalidade = /joão pessoa|bayeux|santa rita|cabedelo|pb/i.test(enderecoTratado);
+        const queryCompleta = temLocalidade ? enderecoTratado : enderecoTratado + ", João Pessoa, Paraíba";
 
+        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=5&countrycodes=br&q=` + encodeURIComponent(queryCompleta);
+        
+        try {
+            const resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/12.0' } });
+            const dados = await resposta.json();
+            
+            if (dados && dados.length > 0) {
+                const cidadesPermitidas = ['joão pessoa', 'bayeux', 'santa rita', 'cabedelo'];
+                
+                for (let item of dados) {
+                    const addr = item.address || {};
+                    const cidade = (addr.city || addr.town || addr.municipality || addr.city_district || addr.suburb || '').toLowerCase();
+                    
+                    if (cidadesPermitidas.some(cidadeValida => cidade.includes(cidadeValida) || item.display_name.toLowerCase().includes(cidadeValida))) {
+                        return { 
+                            lat: parseFloat(item.lat), 
+                            lon: parseFloat(item.lon),
+                            nomeCompleto: item.display_name
+                        };
+                    }
+                }
+                
+                // Se nenhum bater rigorosamente com o filtro de cidade mas encontrou resultado, pega o primeiro para não travar
+                return {
+                    lat: parseFloat(dados[0].lat),
+                    lon: parseFloat(dados[0].lon),
+                    nomeCompleto: dados[0].display_name
+                };
+            }
+            return null;
         } catch (e) {
             console.error("Erro na geocodificação:", e);
             return null;
@@ -216,7 +245,7 @@
             const destino = await geocodificar(enderecoCliente);
 
             if (!destino) {
-                divResultado.innerHTML = '❌ Endereço não encontrado. Tente digitar no formato: <em>Nome da Rua, Número, Bairro</em> (Ex: Av. Epitácio Pessoa, 500, Miramar).';
+                divResultado.innerHTML = '❌ Endereço não encontrado ou fora da nossa área de atendimento (João Pessoa, Bayeux, Santa Rita e Cabedelo). Verifique se digitou o número e a cidade corretamente.';
                 return;
             }
 
@@ -277,7 +306,7 @@
                         📍 <strong>Endereço Encontrado:</strong> ${destino.nomeCompleto}<br><br>
                         🏪 <strong>Origem:</strong> ${dadosLoja.nome} ${foiAutomatico ? '(Mais próxima)' : ''}<br>
                         📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
-                        ❌ <strong>Consulta indisponível devido à distância. Contate a gestão para mais informações.</strong>
+                        ❌ <strong>Consulta indisponível devido distância, contate Júlio para mais informações</strong>
                     `;
                     return;
                 }
