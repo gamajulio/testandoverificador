@@ -117,8 +117,6 @@
         const inputEndereco = document.getElementById("endereco");
         const btnCalcular = document.getElementById("btnCalcular");
 
-        localStorage.removeItem('zeny_historico_fretes');
-
         btnCalcular.addEventListener("click", () => iniciarCalculo());
 
         inputEndereco.addEventListener("keydown", function(event) {
@@ -130,38 +128,44 @@
     });
 
     async function geocodificar(enderecoOriginal) {
-        let enderecoTratado = enderecoOriginal
-            .replace(/\b(av|av\.)\b/gi, "Avenida")
-            .replace(/\b(r|r\.)\b/gi, "Rua")
-            .replace(/\b(tr|trav\.)\b/gi, "Travessa")
-            .trim();
-
-        const temLocalidade = /joão pessoa|bayeux|santa rita|cabedelo|pb/i.test(enderecoTratado);
-        const cidadeBusca = temLocalidade ? "" : ", João Pessoa";
-
-        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=5&countrycodes=br&q=` + encodeURIComponent(enderecoTratado + cidadeBusca);
+        let limpo = enderecoOriginal.trim();
         
+        // Garante que se o usuário não digitou a cidade, o script complementa para fixar na região metropolitana
+        const temCidade = /joão pessoa|bayeux|santa rita|cabedelo/i.test(limpo);
+        const queryFinal = temCidade ? limpo : `${limpo}, João Pessoa, PB`;
+
+        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=10&countrycodes=br&q=` + encodeURIComponent(queryFinal);
+
         try {
-            const resposta = await fetch(url, { headers: { 'User-Agent': 'CalculadoraFreteZeny/11.0' } });
-            let dados = await resposta.json();
-            
-            if (dados && dados.length > 0) {
-                const cidadesPermitidas = ['joão pessoa', 'bayeux', 'santa rita', 'cabedelo'];
-                
-                for (let item of dados) {
-                    const addr = item.address || {};
-                    const cidade = (addr.city || addr.town || addr.municipality || addr.city_district || '').toLowerCase();
-                    
-                    if (cidadesPermitidas.some(cidadeValida => cidade.includes(cidadeValida))) {
-                        return { 
-                            lat: parseFloat(item.lat), 
-                            lon: parseFloat(item.lon),
-                            nomeCompleto: item.display_name
-                        };
-                    }
+            const resposta = await fetch(url, { headers: { 'User-Agent': 'ZenyCalculadoraFrete/13.0' } });
+            const resultados = await resposta.json();
+
+            if (!resultados || resultados.length === 0) return null;
+
+            // Filtro estrito para garantir que o resultado caia nas cidades permitidas da região
+            const cidadesValidas = ['joão pessoa', 'bayeux', 'santa rita', 'cabedelo'];
+
+            for (let r of resultados) {
+                const addr = r.address || {};
+                const cidadeEncontrada = (addr.city || addr.town || addr.municipality || addr.city_district || addr.suburb || '').toLowerCase();
+                const textoCompleto = r.display_name.toLowerCase();
+
+                if (cidadesValidas.some(c => cidadeEncontrada.includes(c) || textoCompleto.includes(c))) {
+                    return {
+                        lat: parseFloat(r.lat),
+                        lon: parseFloat(r.lon),
+                        nomeCompleto: r.display_name
+                    };
                 }
             }
-            return null;
+
+            // Se nenhum bateu exatamente com a cidade nos metadados, retorna o primeiro resultado geográfico válido para não travar
+            return {
+                lat: parseFloat(resultados[0].lat),
+                lon: parseFloat(resultados[0].lon),
+                nomeCompleto: resultados[0].display_name
+            };
+
         } catch (e) {
             console.error("Erro na geocodificação:", e);
             return null;
@@ -179,3 +183,156 @@
                 if (data.routes && data.routes.length > 0) {
                     return { chave, distancia: data.routes[0].distance };
                 }
+            } catch (e) {
+                console.error(`Erro ao consultar distância para ${loja.nome}:`, e);
+            }
+            return { chave, distancia: Infinity };
+        });
+
+        const resultados = await Promise.all(promessas);
+        resultados.sort((a, b) => a.distancia - b.distancia);
+        return resultados[0].distancia !== Infinity ? resultados[0].chave : 'centro';
+    }
+
+    async function iniciarCalculo() {
+        const btnCalcular = document.getElementById('btnCalcular');
+        if (btnCalcular.disabled) return;
+
+        const enderecoCliente = document.getElementById('endereco').value.trim();
+        const divResultado = document.getElementById('resultado');
+        const divMap = document.getElementById('map');
+
+        if (!enderecoCliente) {
+            alert('Por favor, digite o endereço do cliente.');
+            return;
+        }
+
+        btnCalcular.disabled = true;
+        btnCalcular.textContent = 'Calculando... ⏳';
+        divResultado.style.display = 'block';
+        divResultado.innerHTML = 'Buscando endereço e calculando rota... ⏳';
+
+        try {
+            const destino = await geocodificar(enderecoCliente);
+
+            if (!destino) {
+                divResultado.innerHTML = '❌ Endereço não encontrado. Tente digitar no formato: <em>Nome da Rua, Número, Bairro</em> (Ex: Av. Epitácio Pessoa, 500, Miramar).';
+                return;
+            }
+
+            let chaveLojaSelecionada = document.getElementById('lojaOrigem').value;
+            let foiAutomatico = false;
+
+            if (chaveLojaSelecionada === 'auto') {
+                foiAutomatico = true;
+                divResultado.innerHTML = 'Verificando loja mais próxima... ⚡';
+                chaveLojaSelecionada = await encontrarLojaMaisProxima(destino);
+            }
+
+            const dadosLoja = LOJAS_DADOS[chaveLojaSelecionada];
+            const origem = { lat: dadosLoja.lat, lon: dadosLoja.lon };
+
+            divMap.style.display = 'block';
+
+            if (!map) {
+                map = L.map('map').setView([origem.lat, origem.lon], 13);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(map);
+            } else {
+                map.setView([origem.lat, origem.lon], 13);
+            }
+
+            if (routingControl) {
+                map.removeControl(routingControl);
+            }
+
+            routingControl = L.Routing.control({
+                waypoints: [
+                    L.latLng(origem.lat, origem.lon),
+                    L.latLng(destino.lat, destino.lon)
+                ],
+                router: new L.Routing.osrmv1({
+                    serviceUrl: 'https://router.project-osrm.org/route/v1'
+                }),
+                routeWhileDragging: false,
+                showAlternatives: false,
+                fitSelectedRoutes: true,
+                language: 'pt',
+                lineOptions: { 
+                    styles: [{ color: '#007bff', opacity: 0.8, weight: 6 }] 
+                },
+                createMarker: function(i, wp) {
+                    return L.marker(wp.latLng).bindPopup(i === 0 ? dadosLoja.nome : "Cliente");
+                }
+            }).addTo(map);
+
+            routingControl.on('routesfound', function(e) {
+                const rotas = e.routes;
+                const distanciaMetros = rotas[0].summary.totalDistance;
+                const distanciaKm = distanciaMetros / 1000;
+
+                if (distanciaKm > 40) {
+                    divResultado.innerHTML = `
+                        📍 <strong>Endereço Encontrado:</strong> ${destino.nomeCompleto}<br><br>
+                        🏪 <strong>Origem:</strong> ${dadosLoja.nome} ${foiAutomatico ? '(Mais próxima)' : ''}<br>
+                        📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
+                        ❌ <strong>Consulta indisponível devido à distância. Contate a gestão para mais informações.</strong>
+                    `;
+                    return;
+                }
+
+                let taxaOnline = 0;
+                const kmArredondado = Math.ceil(distanciaKm);
+                
+                for (let faixa of dadosLoja.tabela) {
+                    if (kmArredondado <= faixa.limite) {
+                        taxaOnline = faixa.valor;
+                        break;
+                    }
+                }
+
+                let taxaComRetorno = Math.ceil(taxaOnline * 1.30);
+
+                const valorRetornoFormatado = taxaComRetorno.toFixed(2).replace('.', ',');
+                const valorOnlineFormatado = taxaOnline.toFixed(2).replace('.', ',');
+                const textoWhatsApp = `Sairá da unidade do ${dadosLoja.nomeCurto}. A taxa fica R$ ${valorRetornoFormatado} e por apenas R$ ${valorOnlineFormatado} se o pedido for pago todo via pix antecipadamente!`;
+
+                divResultado.innerHTML = `
+                    📍 <strong>Endereço Encontrado:</strong> ${destino.nomeCompleto}<br><br>
+                    🏪 <strong>Origem:</strong> ${dadosLoja.nome} ${foiAutomatico ? '⚡ <em>(Mais próxima)</em>' : ''}<br>
+                    📍 <strong>Distância do Trajeto:</strong> ${distanciaKm.toFixed(2)} km<br><br>
+                    🔄 <strong>Taxa de Entrega com Retorno:</strong> R$ ${valorRetornoFormatado}<br>
+                    💻 <strong>Taxa de Entrega Online:</strong> R$ ${valorOnlineFormatado}
+                    <button type="button" class="btn-copiar" id="btnCopiarWhats">📋 Copiar Orçamento para WhatsApp</button>
+                `;
+
+                document.getElementById('btnCopiarWhats').addEventListener('click', function() {
+                    navigator.clipboard.writeText(textoWhatsApp).then(() => {
+                        const btn = this;
+                        btn.textContent = '✅ Copiado! Cole no WhatsApp';
+                        btn.style.backgroundColor = '#128C7E';
+                        setTimeout(() => {
+                            btn.textContent = '📋 Copiar Orçamento para WhatsApp';
+                            btn.style.backgroundColor = '#25D366';
+                        }, 2500);
+                    });
+                });
+            });
+
+            routingControl.on('routingerror', function(e) {
+                console.error("Erro no OSRM Routing:", e);
+                divResultado.innerHTML = '❌ Erro ao calcular o trajeto nas ruas. Verifique se o endereço do cliente possui acesso viário válido.';
+            });
+
+        } finally {
+            setTimeout(() => {
+                btnCalcular.disabled = false;
+                btnCalcular.textContent = 'Calcular Rota e Taxa';
+            }, 1000);
+        }
+    }
+</script>
+
+</body>
+</html>
